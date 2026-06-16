@@ -13,6 +13,10 @@ and this project adheres to
 - x86_64 nested KVM state preservation across snapshots.
 - Legacy v9 snapshot loading on x86_64 and aarch64; new snapshots use v1000.
 
+### Fixed
+
+- Preserve IA32_XSS across x86_64 snapshot restore for guests using supervisor XSTATE.
+
 ## [1.15.1]
 
 ### Added
