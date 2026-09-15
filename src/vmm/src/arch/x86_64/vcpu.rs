@@ -10,9 +10,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use kvm_bindings::{
-    CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MAX_MSR_ENTRIES, Msrs, Xsave, kvm_debugregs, kvm_lapic_state,
-    kvm_mp_state, kvm_regs, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, kvm_xsave2,
-    nested::KvmNestedStateBuffer,
+    CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MAX_MSR_ENTRIES, KVM_STATE_NESTED_FORMAT_VMX, Msrs, Xsave,
+    kvm_debugregs, kvm_lapic_state, kvm_mp_state, kvm_nested_state, kvm_regs, kvm_sregs,
+    kvm_vcpu_events, kvm_xcrs, kvm_xsave, kvm_xsave2, nested::KvmNestedStateBuffer,
 };
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use log::{error, warn};
@@ -169,6 +169,30 @@ pub struct Peripherals {
     pub pio_bus: Option<Arc<Bus>>,
     /// Mmio bus.
     pub mmio_bus: Option<Arc<Bus>>,
+}
+
+/// Returns whether a buffer filled by `KVM_GET_NESTED_STATE` holds state that
+/// must be restored with `KVM_SET_NESTED_STATE`.
+///
+/// kvm-ioctls' `VcpuFd::nested_state()` reports `None` whenever KVM returns
+/// only the fixed-size header, but the header alone carries meaningful state:
+/// a guest in VMX operation without a currently loaded VMCS reports just
+/// `hdr.vmx.vmxon_pa` there, without inflating `size`. Dropping that state
+/// leaves the restored vCPU out of VMX operation on the host while the guest
+/// kernel still believes VMX is on (that state lives in restored guest
+/// memory), so the guest never re-executes VMXON and its first VMPTRLD faults.
+/// Mirror QEMU's `nested_state_needed()` and inspect the header GPAs instead.
+fn has_nested_state(state: &KvmNestedStateBuffer) -> bool {
+    // Any variable-size data following the header is state (a current
+    // VMCS/VMCB always inflates `size`).
+    if state.size as usize > std::mem::size_of::<kvm_nested_state>() {
+        return true;
+    }
+    // The VMXON-only case described above is header-only. SVM has no VMXON
+    // equivalent, so there the header alone carries no state.
+    u32::from(state.format) == KVM_STATE_NESTED_FORMAT_VMX
+        // SAFETY: the format check selects the valid union member.
+        && unsafe { state.hdr.vmx.vmxon_pa != u64::MAX }
 }
 
 impl KvmVcpu {
@@ -599,11 +623,11 @@ impl KvmVcpu {
         });
         let cpuid = self.get_cpuid()?;
         let mut nested_state = KvmNestedStateBuffer::empty();
-        let nested_state = self
+        let _ = self
             .fd
             .nested_state(&mut nested_state)
-            .map_err(KvmVcpuError::VcpuGetNestedState)?
-            .map(|_| nested_state);
+            .map_err(KvmVcpuError::VcpuGetNestedState)?;
+        let nested_state = has_nested_state(&nested_state).then_some(nested_state);
         let saved_msrs = self.get_msr_chunks(self.msrs_to_save.iter().copied())?;
         let vcpu_events = self
             .fd
