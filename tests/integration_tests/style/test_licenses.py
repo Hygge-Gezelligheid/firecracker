@@ -31,7 +31,6 @@ RIVOS_COPYRIGHT = "Copyright © 2023 Rivos, Inc."
 RIVOS_LICENSE = "SPDX-License-Identifier: Apache-2.0"
 ORACLE_COPYRIGHT = "Copyright © 2020, Oracle and/or its affiliates."
 ORACLE_LICENSE = "SPDX-License-Identifier: Apache-2.0"
-AGENTENV_COPYRIGHT = "Copyright 2026 AgentENV contributors."
 
 EXCLUDE = ["build", ".kernel", ".git"]
 
@@ -99,11 +98,6 @@ def _validate_license(filename):
             file, ORACLE_LICENSE
         )
 
-        has_agentenv_copyright = (
-            AGENTENV_COPYRIGHT in copyright_info
-            and _look_for_license(file, AMAZON_LICENSE)
-        )
-
         return (
             has_amazon_copyright
             or has_chromium_copyright
@@ -112,7 +106,6 @@ def _validate_license(filename):
             or has_intel_copyright
             or has_rivos_copyright
             or has_oracle_copyright
-            or has_agentenv_copyright
         )
 
 
