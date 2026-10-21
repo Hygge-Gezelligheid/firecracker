@@ -207,9 +207,13 @@ impl<Data: DeserializeOwned> Snapshot<Data> {
             return Err(SnapshotError::InvalidMagic(snapshot.header.magic));
         }
 
-        if snapshot.header.version.major != SNAPSHOT_VERSION.major
-            || snapshot.header.version.minor > SNAPSHOT_VERSION.minor
-        {
+        let supported_version = snapshot.header.version.major == SNAPSHOT_VERSION.major
+            && snapshot.header.version.minor <= SNAPSHOT_VERSION.minor;
+        // ARM's wire layout is unchanged from v9; only x86 added nested vCPU state.
+        #[cfg(target_arch = "aarch64")]
+        let supported_version =
+            supported_version || snapshot.header.version == Version::new(9, 0, 0);
+        if !supported_version {
             return Err(SnapshotError::InvalidFormatVersion(
                 snapshot.header.version.clone(),
             ));
@@ -448,6 +452,62 @@ mod tests {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_arm_v9_restore_and_current_output() {
+        let mut old = Snapshot::new(MicrovmState::default());
+        old.header.version = Version::new(9, 0, 0);
+        let mut bytes = Vec::new();
+        old.save(&mut bytes).unwrap();
+
+        let loaded = load_microvm_snapshot(&mut bytes.as_slice()).unwrap();
+        assert_eq!(loaded.format_version, Version::new(9, 0, 0));
+        assert_eq!(
+            get_format_version(&mut bytes.as_slice()).unwrap(),
+            loaded.format_version
+        );
+        let expected = serde_json::to_value(&loaded.data).unwrap();
+        let mut upgraded = Vec::new();
+        Snapshot::new(loaded.data).save(&mut upgraded).unwrap();
+        let restored = load_microvm_snapshot(&mut upgraded.as_slice()).unwrap();
+        assert_eq!(restored.format_version, Version::new(1000, 0, 0));
+        assert_eq!(serde_json::to_value(&restored.data).unwrap(), expected);
+
+        // Accepting v9 must not bypass the existing integrity or architecture checks.
+        *bytes.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            load_microvm_snapshot(&mut bytes.as_slice()),
+            Err(SnapshotError::Crc64)
+        ));
+        old.header.magic = 0x0710_1984_8664_0000;
+        bytes.clear();
+        old.save(&mut bytes).unwrap();
+        assert!(matches!(
+            load_microvm_snapshot(&mut bytes.as_slice()),
+            Err(SnapshotError::InvalidMagic(_))
+        ));
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_arm_rejects_unknown_legacy_versions() {
+        for version in [
+            Version::new(8, 0, 0),
+            Version::new(9, 0, 1),
+            Version::new(9, 1, 0),
+            Version::new(10, 0, 0),
+        ] {
+            let mut snapshot = Snapshot::new(MicrovmState::default());
+            snapshot.header.version = version;
+            let mut bytes = Vec::new();
+            snapshot.save(&mut bytes).unwrap();
+            assert!(matches!(
+                load_microvm_snapshot(&mut bytes.as_slice()),
+                Err(SnapshotError::InvalidFormatVersion(_))
+            ));
+        }
+    }
+
     #[test]
     fn test_snapshot_restore() {
         let state = MicrovmState::default();
@@ -579,3 +639,4 @@ mod tests {
         Snapshot::<()>::load_without_crc_check(&data).unwrap();
     }
 }
+
