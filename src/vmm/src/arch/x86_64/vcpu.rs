@@ -10,9 +10,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use kvm_bindings::{
-    CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MAX_MSR_ENTRIES, KVM_STATE_NESTED_FORMAT_VMX, Msrs, Xsave,
-    kvm_debugregs, kvm_lapic_state, kvm_mp_state, kvm_nested_state, kvm_regs, kvm_sregs,
-    kvm_vcpu_events, kvm_xcrs, kvm_xsave, kvm_xsave2, nested::KvmNestedStateBuffer,
+    CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MAX_MSR_ENTRIES, KVM_STATE_NESTED_FORMAT_SVM,
+    KVM_STATE_NESTED_FORMAT_VMX, Msrs, Xsave, kvm_debugregs, kvm_lapic_state, kvm_mp_state,
+    kvm_nested_state, kvm_regs, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave, kvm_xsave2,
+    nested::KvmNestedStateBuffer,
 };
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use log::{error, warn};
@@ -185,18 +186,23 @@ pub struct Peripherals {
 /// leaves the restored vCPU out of VMX operation on the host while the guest
 /// kernel still believes VMX is on (that state lives in restored guest
 /// memory), so the guest never re-executes VMXON and its first VMPTRLD faults.
-/// Mirror QEMU's `nested_state_needed()` and inspect the header GPAs instead.
+/// SVM also stores GIF in the header, even outside nested guest mode.
 fn has_nested_state(state: &KvmNestedStateBuffer) -> bool {
     // Any variable-size data following the header is state (a current
     // VMCS/VMCB always inflates `size`).
     if state.size as usize > std::mem::size_of::<kvm_nested_state>() {
         return true;
     }
-    // The VMXON-only case described above is header-only. SVM has no VMXON
-    // equivalent, so there the header alone carries no state.
-    u32::from(state.format) == KVM_STATE_NESTED_FORMAT_VMX
-        // SAFETY: the format check selects the valid union member.
-        && unsafe { state.hdr.vmx.vmxon_pa != u64::MAX }
+    // Preserve both GIF values for SVM. The absence of GIF_SET means that
+    // interrupts are disabled, not that there is no state to restore.
+    match u32::from(state.format) {
+        KVM_STATE_NESTED_FORMAT_SVM => true,
+        KVM_STATE_NESTED_FORMAT_VMX => {
+            // SAFETY: the format check selects the valid union member.
+            unsafe { state.hdr.vmx.vmxon_pa != u64::MAX }
+        }
+        _ => false,
+    }
 }
 
 impl KvmVcpu {
@@ -1218,6 +1224,29 @@ mod tests {
             // overflow
             assert!(vcpu.is_tsc_scaling_required(30_000_000).unwrap());
         }
+    }
+
+    #[test]
+    fn test_has_nested_state_header() {
+        use kvm_bindings::{KVM_STATE_NESTED_FORMAT_SVM, KVM_STATE_NESTED_GIF_SET};
+
+        let mut state = KvmNestedStateBuffer::empty();
+        state.size = std::mem::size_of::<kvm_nested_state>() as u32;
+        state.format = KVM_STATE_NESTED_FORMAT_SVM as u16;
+        for flags in [0, KVM_STATE_NESTED_GIF_SET as u16] {
+            state.flags = flags;
+            assert!(has_nested_state(&state), "SVM GIF must survive snapshots");
+        }
+
+        state.format = KVM_STATE_NESTED_FORMAT_VMX as u16;
+        state.flags = 0;
+        state.hdr.vmx.vmxon_pa = u64::MAX;
+        assert!(!has_nested_state(&state));
+        state.hdr.vmx.vmxon_pa = 0x1000;
+        assert!(has_nested_state(&state));
+        state.hdr.vmx.vmxon_pa = u64::MAX;
+        state.size += 1;
+        assert!(has_nested_state(&state));
     }
 
     #[test]
