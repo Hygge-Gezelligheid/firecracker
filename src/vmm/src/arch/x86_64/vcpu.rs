@@ -1231,14 +1231,14 @@ mod tests {
         use kvm_bindings::{KVM_STATE_NESTED_FORMAT_SVM, KVM_STATE_NESTED_GIF_SET};
 
         let mut state = KvmNestedStateBuffer::empty();
-        state.size = std::mem::size_of::<kvm_nested_state>() as u32;
-        state.format = KVM_STATE_NESTED_FORMAT_SVM as u16;
-        for flags in [0, KVM_STATE_NESTED_GIF_SET as u16] {
+        state.size = u32::try_from(std::mem::size_of::<kvm_nested_state>()).unwrap();
+        state.format = u16::try_from(KVM_STATE_NESTED_FORMAT_SVM).unwrap();
+        for flags in [0, u16::try_from(KVM_STATE_NESTED_GIF_SET).unwrap()] {
             state.flags = flags;
             assert!(has_nested_state(&state), "SVM GIF must survive snapshots");
         }
 
-        state.format = KVM_STATE_NESTED_FORMAT_VMX as u16;
+        state.format = u16::try_from(KVM_STATE_NESTED_FORMAT_VMX).unwrap();
         state.flags = 0;
         state.hdr.vmx.vmxon_pa = u64::MAX;
         assert!(!has_nested_state(&state));

@@ -400,14 +400,10 @@ fn verify_create_state_only_snapshot(pci_enabled: bool, memory_hotplug: bool) ->
 fn test_create_state_only_snapshot() {
     for pci_enabled in [false, true] {
         for memory_hotplug in [false, true] {
-            let snapshot_file =
-                verify_create_state_only_snapshot(pci_enabled, memory_hotplug);
+            let snapshot_file = verify_create_state_only_snapshot(pci_enabled, memory_hotplug);
 
             // Verify the snapshot file is non-empty (state was written).
-            let snap_file_len = snapshot_file
-                .as_file()
-                .seek(SeekFrom::End(0))
-                .unwrap();
+            let snap_file_len = snapshot_file.as_file().seek(SeekFrom::End(0)).unwrap();
             assert!(snap_file_len > 0);
         }
     }

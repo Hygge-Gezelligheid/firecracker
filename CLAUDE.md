@@ -1,16 +1,23 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with
+code in this repository.
 
 ## Project Overview
 
-Firecracker is a Virtual Machine Monitor (VMM) that uses Linux KVM to create and manage lightweight microVMs. Written in Rust (2024 edition), it targets `x86_64-unknown-linux-musl` with toolchain 1.89.0.
+Firecracker is a Virtual Machine Monitor (VMM) that uses Linux KVM to create and
+manage lightweight microVMs. Written in Rust (2024 edition), it targets
+`x86_64-unknown-linux-musl` with toolchain 1.89.0.
 
-Key crates: `firecracker` (main binary + API server), `vmm` (core library), `jailer` (process isolation, requires musl). Other crates are utilities — see `Cargo.toml` workspace members.
+Key crates: `firecracker` (main binary + API server), `vmm` (core library),
+`jailer` (process isolation, requires musl). Other crates are utilities — see
+`Cargo.toml` workspace members.
 
 ## Build & Test
 
-All build/test commands use `./tools/devtool` (runs inside Docker container `public.ecr.aws/firecracker/fcuvm`). The local machine **cannot** compile or run tests — must use remote (see below).
+All build/test commands use `./tools/devtool` (runs inside Docker container
+`public.ecr.aws/firecracker/fcuvm`). The local machine **cannot** compile or run
+tests — must use remote (see below).
 
 ```bash
 ./tools/devtool build                    # Debug build
@@ -21,6 +28,7 @@ All build/test commands use `./tools/devtool` (runs inside Docker container `pub
 ```
 
 For faster unit test iteration, run cargo directly inside the Docker container:
+
 ```bash
 sudo docker run --rm -v $(pwd):/firecracker -w /firecracker --privileged \
   public.ecr.aws/firecracker/fcuvm:v85 bash -c \
@@ -34,38 +42,48 @@ CI uses Buildkite (`.buildkite/`) and GitHub Actions for supplementary checks.
 ### Process & Thread Model
 
 One Firecracker process = one microVM, with three thread types:
+
 - **API thread**: HTTP server on Unix socket, receives REST requests
 - **VMM thread**: Machine model, device emulation, VirtIO event loop
 - **vCPU thread(s)**: KVM_RUN main loop (one per virtual CPU)
 
 ### API Request Flow (critical for adding new endpoints)
 
-HTTP request → `ParsedRequest::try_from()` (routing in `src/firecracker/src/api_server/parsed_request.rs`)
-→ `VmmAction` enum variant (defined in `src/vmm/src/rpc_interface.rs`)
-→ sent over mpsc channel to VMM thread
-→ `RuntimeApiController::handle_request()` dispatches to handler method
-→ returns `Result<VmmData, VmmActionError>` → serialized to HTTP response
+HTTP request → `ParsedRequest::try_from()` (routing in
+`src/firecracker/src/api_server/parsed_request.rs`) → `VmmAction` enum variant
+(defined in `src/vmm/src/rpc_interface.rs`) → sent over mpsc channel to VMM
+thread → `RuntimeApiController::handle_request()` dispatches to handler method →
+returns `Result<VmmData, VmmActionError>` → serialized to HTTP response
 
 **To add a new endpoint:**
-1. Add OpenAPI spec in `src/firecracker/swagger/firecracker.yaml` (Swagger 2.0 format — uses `definitions`, not `components/schemas`)
-2. Add `VmmAction` variant and `VmmData` variant in `rpc_interface.rs`
-3. Add routing in `parsed_request.rs` (`ParsedRequest::try_from`)
-4. Add response conversion in `parsed_request.rs` (`convert_to_response`)
-5. Add handler method on `RuntimeApiController`
-6. Add the action to `PrebootApiController`'s disallowed list if it's post-boot only
-7. Tests: routing test, response test, preboot rejection test, handler test
+
+1. Add OpenAPI spec in `src/firecracker/swagger/firecracker.yaml` (Swagger 2.0
+   format — uses `definitions`, not `components/schemas`)
+1. Add `VmmAction` variant and `VmmData` variant in `rpc_interface.rs`
+1. Add routing in `parsed_request.rs` (`ParsedRequest::try_from`)
+1. Add response conversion in `parsed_request.rs` (`convert_to_response`)
+1. Add handler method on `RuntimeApiController`
+1. Add the action to `PrebootApiController`'s disallowed list if it's post-boot
+   only
+1. Tests: routing test, response test, preboot rejection test, handler test
 
 ### Pre-boot vs Post-boot API
 
-`PrebootApiController` handles requests before VM boot (config, boot-source, drives, etc.).
-`RuntimeApiController` handles requests after boot (pause, resume, snapshot, metrics, etc.).
-New runtime-only actions **must** be added to the disallowed operations match arm in `PrebootApiController::handle_preboot_request()`, or you'll get a non-exhaustive pattern error.
+`PrebootApiController` handles requests before VM boot (config, boot-source,
+drives, etc.). `RuntimeApiController` handles requests after boot (pause,
+resume, snapshot, metrics, etc.). New runtime-only actions **must** be added to
+the disallowed operations match arm in
+`PrebootApiController::handle_preboot_request()`, or you'll get a non-exhaustive
+pattern error.
 
 ### Key VMM Files (`src/vmm/src/`)
 
-- `builder.rs` — MicroVM construction from config; `default_vmm()` test helper (128 MiB, 1 vCPU)
-- `rpc_interface.rs` — API dispatch; test helpers: `runtime_request()`, `preboot_request()`
-- `persist.rs` — Snapshot save/restore, uffd handshake, `GuestRegionUffdMapping`, `build_uffd_mappings()`
+- `builder.rs` — MicroVM construction from config; `default_vmm()` test helper
+  (128 MiB, 1 vCPU)
+- `rpc_interface.rs` — API dispatch; test helpers: `runtime_request()`,
+  `preboot_request()`
+- `persist.rs` — Snapshot save/restore, uffd handshake,
+  `GuestRegionUffdMapping`, `build_uffd_mappings()`
 - `vstate/memory.rs` — Guest memory types and traits
 - `vstate/vm.rs` — KVM VM wrapper, `guest_memory()` accessor
 - `device_manager/` — Device lifecycle, hot-plug
@@ -83,13 +101,22 @@ GuestMemoryMmap = GuestRegionCollection<GuestRegionMmapExt>
             └─ also Deref<Target = MmapRegion>
 ```
 
-Key traits to import: `GuestMemory` (for `.iter()`, `.num_regions()`), `GuestMemoryRegion` (for `.start_addr()`, `.len()`). Methods like `.as_ptr()` and `.size()` come from `MmapRegion` via `Deref`, not from traits.
+Key traits to import: `GuestMemory` (for `.iter()`, `.num_regions()`),
+`GuestMemoryRegion` (for `.start_addr()`, `.len()`). Methods like `.as_ptr()`
+and `.size()` come from `MmapRegion` via `Deref`, not from traits.
 
 ### Guest Memory Gotchas
 
-- **HugePageConfig is config-only**: Page size is NOT stored on `MmapRegion` or `GuestRegionMmap`. The only source of truth is `vm_resources.machine_config.huge_pages`. This is by design.
-- **GuestRegionUffdMapping.offset**: This is a cumulative byte offset into a contiguous layout of all regions (snapshot file position), **NOT** the Guest Physical Address. GPAs have gaps (MMIO hole near 4 GiB), but the snapshot layout is contiguous. See `build_uffd_mappings()` in `persist.rs`.
-- **Shared mapping logic**: `build_uffd_mappings()` in `persist.rs` is the single source of truth for constructing `GuestRegionUffdMapping` lists — used by both the uffd restore path and the runtime API.
+- **HugePageConfig is config-only**: Page size is NOT stored on `MmapRegion` or
+  `GuestRegionMmap`. The only source of truth is
+  `vm_resources.machine_config.huge_pages`. This is by design.
+- **GuestRegionUffdMapping.offset**: This is a cumulative byte offset into a
+  contiguous layout of all regions (snapshot file position), **NOT** the Guest
+  Physical Address. GPAs have gaps (MMIO hole near 4 GiB), but the snapshot
+  layout is contiguous. See `build_uffd_mappings()` in `persist.rs`.
+- **Shared mapping logic**: `build_uffd_mappings()` in `persist.rs` is the
+  single source of truth for constructing `GuestRegionUffdMapping` lists — used
+  by both the uffd restore path and the runtime API.
 
 ## Code Conventions
 
@@ -120,9 +147,13 @@ ssh edge-dev "cd /home/dsec/test/fc/firecracker && git checkout . && git apply m
 ssh edge-dev "cd /home/dsec/test/fc/firecracker && sudo ./tools/devtool -y test"
 ```
 
-**Caveat**: If the local branch has multiple features, `git diff v1.14.2` includes ALL of them. Scope the diff to specific files (`git diff v1.14.2 -- path/to/files`) to isolate per-feature patches, or the remote will fail to compile due to missing cross-feature dependencies.
+**Caveat**: If the local branch has multiple features, `git diff v1.14.2`
+includes ALL of them. Scope the diff to specific files
+(`git diff v1.14.2 -- path/to/files`) to isolate per-feature patches, or the
+remote will fail to compile due to missing cross-feature dependencies.
 
 ### Known pre-existing test failures
 
 - **`cpu-template-helper`**: binary test fails with error code 101
-- **`test_coverage`**: fails with `BUILDKITE: unbound variable` (CI env not set locally)
+- **`test_coverage`**: fails with `BUILDKITE: unbound variable` (CI env not set
+  locally)

@@ -15,7 +15,8 @@ and this project adheres to
 
 ### Fixed
 
-- Preserve IA32_XSS across x86_64 snapshot restore for guests using supervisor XSTATE.
+- Preserve IA32_XSS across x86_64 snapshot restore for guests using supervisor
+  XSTATE.
 
 ## [1.15.1]
 

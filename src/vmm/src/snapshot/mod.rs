@@ -208,7 +208,12 @@ impl<Data: DeserializeOwned> Snapshot<Data> {
         }
 
         let supported_version = snapshot.header.version.major == SNAPSHOT_VERSION.major
-            && snapshot.header.version.minor <= SNAPSHOT_VERSION.minor;
+            && snapshot
+                .header
+                .version
+                .minor
+                .cmp(&SNAPSHOT_VERSION.minor)
+                .is_le();
         // ARM's wire layout is unchanged from v9; only x86 added nested vCPU state.
         #[cfg(target_arch = "aarch64")]
         let supported_version =
@@ -639,4 +644,3 @@ mod tests {
         Snapshot::<()>::load_without_crc_check(&data).unwrap();
     }
 }
-
