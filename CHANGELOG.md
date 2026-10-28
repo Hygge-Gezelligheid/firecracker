@@ -16,6 +16,7 @@ and this project adheres to
 ### Fixed
 
 - Retain the x86_64 MSR save set across repeated snapshot restores.
+- Save AMD SVM VM_CR and HSAVE_PA when the guest exposes SVM.
 - Preserve IA32_XSS across x86_64 snapshot restore for guests using supervisor XSTATE.
 
 ## [1.15.1]
