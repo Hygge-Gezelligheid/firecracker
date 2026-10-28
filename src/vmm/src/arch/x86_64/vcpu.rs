@@ -156,8 +156,7 @@ pub struct KvmVcpu {
     pub fd: VcpuFd,
     /// Vcpu peripherals, such as buses
     pub peripherals: Peripherals,
-    /// The list of MSRs to include in a VM snapshot, in the same order as KVM returned them
-    /// from KVM_GET_MSR_INDEX_LIST
+    /// MSRs to include in snapshots, extended by guest features and captured state.
     msrs_to_save: Vec<u32>,
     /// Size in bytes requiring to hold the dynamically-sized `kvm_xsave` struct.
     ///
@@ -239,6 +238,14 @@ impl KvmVcpu {
         })
     }
 
+    fn add_msrs_to_save(&mut self, indices: impl IntoIterator<Item = u32>) {
+        for index in indices {
+            if !self.msrs_to_save.contains(&index) {
+                self.msrs_to_save.push(index);
+            }
+        }
+    }
+
     /// Configures a x86_64 specific vcpu for booting Linux and should be called once per vcpu.
     ///
     /// # Arguments
@@ -276,7 +283,7 @@ impl KvmVcpu {
 
         // Clone MSR entries that are modified by CPU template from `VcpuConfig`.
         let mut msrs = vcpu_config.cpu_config.msrs.clone();
-        self.msrs_to_save.extend(msrs.keys());
+        self.add_msrs_to_save(msrs.keys().copied());
 
         // Apply MSR modification to comply the linux boot protocol.
         create_boot_msr_entries().into_iter().for_each(|entry| {
@@ -292,7 +299,7 @@ impl KvmVcpu {
         // Since CPUID tells us what features are enabled for the Guest, we can infer
         // the extra MSRs that we need to save based on a dependency map.
         let extra_msrs = cpuid::common::msrs_to_save_by_cpuid(&kvm_cpuid);
-        self.msrs_to_save.extend(extra_msrs);
+        self.add_msrs_to_save(extra_msrs);
 
         // TODO: Some MSRs depend on values of other MSRs. This dependency will need to
         // be implemented.
@@ -710,7 +717,7 @@ impl KvmVcpu {
     }
 
     /// Use provided state to populate KVM internal state.
-    pub fn restore_state(&self, state: &VcpuState) -> Result<(), KvmVcpuError> {
+    pub fn restore_state(&mut self, state: &VcpuState) -> Result<(), KvmVcpuError> {
         // Ordering requirements:
         //
         // KVM_GET_VCPU_EVENTS/KVM_SET_VCPU_EVENTS is unsafe if other vCPUs are
@@ -778,6 +785,16 @@ impl KvmVcpu {
         self.fd
             .set_vcpu_events(&state.vcpu_events)
             .map_err(KvmVcpuError::VcpuSetVcpuEvents)?;
+
+        // Keep captured and CPUID-dependent registers in subsequent snapshots.
+        // The baseline list also covers required registers absent from older snapshots.
+        self.add_msrs_to_save(
+            state
+                .saved_msrs
+                .iter()
+                .flat_map(|msrs| msrs.as_slice().iter().map(|entry| entry.index)),
+        );
+        self.add_msrs_to_save(cpuid::common::msrs_to_save_by_cpuid(&state.cpuid));
 
         self.kvmclock_ctrl();
         Ok(())
@@ -1052,7 +1069,7 @@ mod tests {
 
     #[test]
     fn test_vcpu_cpuid_restore() {
-        let (kvm, _, vcpu) = setup_vcpu(0x10000);
+        let (kvm, _, mut vcpu) = setup_vcpu(0x10000);
         vcpu.fd.set_cpuid2(&kvm.supported_cpuid).unwrap();
 
         // Mutate the CPUID.
@@ -1070,7 +1087,7 @@ mod tests {
         drop(vcpu);
 
         // Restore the state into a new vcpu.
-        let (_, _vm, vcpu) = setup_vcpu(0x10000);
+        let (_, _vm, mut vcpu) = setup_vcpu(0x10000);
         let result2 = vcpu.restore_state(&state);
         assert!(result2.is_ok(), "{}", result2.unwrap_err());
 
@@ -1085,6 +1102,66 @@ mod tests {
             })
             .unwrap();
         assert!(leaf3.result.eax == 0x1234_5678);
+    }
+
+    #[test]
+    fn test_msr_values_survive_repeated_restore() {
+        use crate::arch::x86_64::generated::msr_index::{
+            MSR_AMD64_VIRT_SPEC_CTRL, MSR_IA32_MC0_CTL, MSR_VM_CR, MSR_VM_HSAVE_PA,
+        };
+
+        let (kvm, vm, mut vcpu) = setup_vcpu(0x10000);
+        let config = create_vcpu_config(&kvm, &vcpu, &CustomCpuTemplate::default()).unwrap();
+        vcpu.configure(
+            vm.guest_memory(),
+            EntryPoint {
+                entry_addr: GuestAddress(0),
+                protocol: BootProtocol::LinuxBoot,
+            },
+            &config,
+        )
+        .unwrap();
+        let mut expected = BTreeMap::from([(MSR_IA32_MC0_CTL, u64::MAX)]);
+        if kvm
+            .fd
+            .get_msr_index_list()
+            .unwrap()
+            .as_slice()
+            .contains(&MSR_AMD64_VIRT_SPEC_CTRL)
+        {
+            expected.insert(MSR_AMD64_VIRT_SPEC_CTRL, 1 << 2);
+        }
+        if cpuid::common::msrs_to_save_by_cpuid(&vcpu.get_cpuid().unwrap()).contains(&MSR_VM_CR) {
+            expected.insert(MSR_VM_CR, 1);
+            expected.insert(MSR_VM_HSAVE_PA, 0x1000);
+        }
+        let entries: Vec<_> = expected
+            .iter()
+            .map(|(&index, &data)| kvm_bindings::kvm_msr_entry {
+                index,
+                data,
+                ..Default::default()
+            })
+            .collect();
+        crate::arch::x86_64::msr::set_msrs(&vcpu.fd, &entries).unwrap();
+        let mut state = vcpu.save_state().unwrap();
+        for _ in 0..2 {
+            let (_, _vm, mut restored) = setup_vcpu(0x10000);
+            restored.restore_state(&state).unwrap();
+            state = restored.save_state().unwrap();
+            let saved: BTreeMap<_, _> = state
+                .saved_msrs
+                .iter()
+                .flat_map(|msrs| {
+                    msrs.as_slice()
+                        .iter()
+                        .map(|entry| (entry.index, entry.data))
+                })
+                .collect();
+            for (&index, &value) in &expected {
+                assert_eq!(saved.get(&index), Some(&value), "MSR {index:#x}");
+            }
+        }
     }
 
     #[test]
