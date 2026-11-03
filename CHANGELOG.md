@@ -12,6 +12,11 @@ and this project adheres to
 
 - x86_64 nested KVM state preservation across snapshots.
 - Legacy v9 snapshot loading on x86_64 and aarch64; new snapshots use v1000.
+- Paused-only `PUT /vm/pre-fault-memory` API from PR #18.
+  On x86_64 with `KVM_CAP_PRE_FAULT_MEMORY`, it distributes validated,
+  page-aligned guest-physical ranges across the available vCPUs using
+  `KVM_PRE_FAULT_MEMORY`; aarch64 remains unsupported. The pre-fault API does
+  not change default startup or snapshot-restore behavior.
 
 ### Fixed
 
@@ -27,6 +32,11 @@ and this project adheres to
 - [#XXXX](https://github.com/firecracker-microvm/firecracker/pull/XXXX): Add
   runtime `GET /vm/dirty-memory-ranges` API for querying dirty guest memory
   ranges without first dumping the guest memory snapshot to a file.
+- [#XXXX](https://github.com/firecracker-microvm/firecracker/pull/XXXX): Add
+  paused-only `PUT /vm/pre-fault-memory` for caller-supplied guest-physical
+  ranges. On x86_64 this uses `KVM_PRE_FAULT_MEMORY` when
+  `KVM_CAP_PRE_FAULT_MEMORY` is available; aarch64 reports unsupported. It does
+  not change default startup or snapshot-restore behavior.
 
 ### Fixed
 
