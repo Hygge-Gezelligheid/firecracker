@@ -885,7 +885,7 @@ paths:
     put:
       summary: Clears committed dirty memory records.
       description: >-
-        Requires a started, paused VM and an empty JSON object. With dirty
+        Send an empty JSON object to a started, paused VM. With dirty
         tracking disabled, returns 204 as a no-op without reading KVM logs or
         scanning mincore; GET retains its residency-based behavior and no new
         dirty baseline is established. With dirty tracking enabled, clears the
@@ -1648,8 +1648,10 @@ definitions:
         description:
           Enable dirty page tracking. If this is enabled, then incremental guest memory
           snapshots can be created. These belong to diff snapshots, which contain, besides
-          the microVM state, only the memory dirtied since a previous snapshot. Full snapshots
-          each contain a full copy of the guest memory.
+          the microVM state, pages dirtied since the current baseline, including pages
+          marked dirty by emulated devices. Saving a native memory snapshot or clearing
+          dirty records advances the baseline; saving only VM state does not. Full
+          snapshots each contain a full copy of the guest memory.
         default: false
       vcpu_count:
         type: integer
