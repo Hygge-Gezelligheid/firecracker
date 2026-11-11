@@ -1,7 +1,7 @@
 // Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use serde::de::Error as DeserializeError;
+use serde::{Deserialize, de::Error as DeserializeError};
 use vmm::logger::{IncMetric, METRICS};
 use vmm::rpc_interface::VmmAction;
 use vmm::vmm_config::snapshot::{
@@ -22,6 +22,10 @@ pub const MISSING_FIELD: &str =
 /// Only specifying one of them is allowed.
 pub const TOO_MANY_FIELDS: &str =
     "too many fields: either `mem_backend` or `mem_file_path` exclusively is required";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClearDirtyMemoryRequest {}
 
 pub(crate) fn parse_put_snapshot(
     body: &Body,
@@ -44,13 +48,7 @@ pub(crate) fn parse_put_snapshot(
 }
 
 pub(crate) fn parse_put_clear_dirty_memory(body: &Body) -> Result<ParsedRequest, RequestError> {
-    let value: serde_json::Value = serde_json::from_slice(body.raw())?;
-    if !matches!(value, serde_json::Value::Object(ref object) if object.is_empty()) {
-        return Err(RequestError::Generic(
-            StatusCode::BadRequest,
-            "Clearing dirty memory requires an empty JSON object.".to_string(),
-        ));
-    }
+    serde_json::from_slice::<ClearDirtyMemoryRequest>(body.raw())?;
     Ok(ParsedRequest::new_sync(VmmAction::ClearDirtyMemory))
 }
 
@@ -144,28 +142,13 @@ mod tests {
 
     #[test]
     fn test_parse_put_clear_dirty_memory() {
-        for body in ["{}", " { } "] {
-            assert_eq!(
-                vmm_action_from_request(parse_put_clear_dirty_memory(&Body::new(body)).unwrap()),
-                VmmAction::ClearDirtyMemory
-            );
-        }
-        for body in [
-            "",
-            "{",
-            "null",
-            "[]",
-            "[{}]",
-            "true",
-            "1",
-            "\"clear\"",
-            "{\"force\":true}",
-        ] {
-            assert!(
-                parse_put_clear_dirty_memory(&Body::new(body)).is_err(),
-                "{body}"
-            );
-        }
+        parse_put_clear_dirty_memory(&Body::new("invalid_body")).unwrap_err();
+        parse_put_clear_dirty_memory(&Body::new(r#"{"force":true}"#)).unwrap_err();
+
+        assert_eq!(
+            vmm_action_from_request(parse_put_clear_dirty_memory(&Body::new("{}")).unwrap()),
+            VmmAction::ClearDirtyMemory
+        );
     }
 
     #[test]
