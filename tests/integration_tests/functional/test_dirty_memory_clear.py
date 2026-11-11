@@ -5,17 +5,16 @@
 import os
 import time
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
 from host_tools.cargo_build import gcc_compile
 
 
-@pytest.fixture
-def dirty_memory_helper(tmp_path):
+@pytest.fixture(scope="session")
+def dirty_memory_helper(tmp_path_factory):
     """Compile the ordinary-page witness for the native guest architecture."""
-    binary = tmp_path / "dirty_memory_helper"
+    binary = tmp_path_factory.mktemp("dirty_memory") / "dirty_memory_helper"
     gcc_compile("host_tools/dirty_memory_helper.c", binary)
     return binary
 
@@ -64,14 +63,13 @@ def controlled_offsets(patches, page_size):
 def read_ranges(vm, ranges):
     """Read exact ranges from the paused Firecracker process, checking short reads."""
     patches = []
-    descriptor = os.open(f"/proc/{vm.firecracker_pid}/mem", os.O_RDONLY)
-    try:
+    with open(f"/proc/{vm.firecracker_pid}/mem", "rb") as memory:
         for entry in ranges:
-            data = os.pread(descriptor, entry["length"], entry["base_host_virt_addr"])
+            data = os.pread(
+                memory.fileno(), entry["length"], entry["base_host_virt_addr"]
+            )
             assert len(data) == entry["length"], "Short external memory read"
             patches.append((entry["image_offset"], data))
-    finally:
-        os.close(descriptor)
     return patches
 
 
@@ -96,7 +94,6 @@ def capture_state(vm, name):
     """State-only capture performs device preparation without resetting bitmaps."""
     vm.pause()
     vm.api.snapshot_create.put(snapshot_path=name)
-    return Path(vm.chroot()) / name
 
 
 def test_clear_dirty_memory_without_tracking(uvm_plain):
@@ -115,7 +112,7 @@ def test_clear_dirty_memory_without_tracking(uvm_plain):
     for _ in range(2):
         response = vm.api.clear_dirty_memory.put()
         assert response.status_code == 204 and response.content == b""
-        assert vm.api.describe.get().json()["state"] == "Paused"
+        assert vm.state == "Paused"
         after = vm.api.dirty_memory_ranges.get().json()
         assert after == before
         assert read_ranges(vm, before["ranges"]) == contents
@@ -138,7 +135,7 @@ def test_clear_dirty_memory_incremental_restore(
     )
     wait_for_status(vm, 0)
     # A full memory read does not consume the KVM dirty log.
-    state = capture_state(vm, "s0.state")
+    capture_state(vm, "s0.state")
     mappings = vm.api.guest_memory_regions.get().json()
     ranges = [
         {
@@ -161,7 +158,7 @@ def test_clear_dirty_memory_incremental_restore(
 
     vm.resume()
     command(vm, 1)
-    state = capture_state(vm, "s1.state")
+    capture_state(vm, "s1.state")
     dirty = vm.api.dirty_memory_ranges.get().json()
     assert includes(dirty, offsets[0])
     assert not includes(dirty, offsets[1]) and not includes(dirty, offsets[2])
@@ -174,9 +171,7 @@ def test_clear_dirty_memory_incremental_restore(
     with delta.mem.open("rb") as memory:
         memory.seek(offsets[0])
         assert memory.read(page_size) == bytes(page_size)
-    correct = delta.rebase_snapshot(
-        replace(delta, mem=image, vmstate=state), use_snapshot_editor=True
-    )
+    correct = delta.rebase_snapshot(replace(delta, mem=image), use_snapshot_editor=True)
     vm.kill()
     restored = microvm_factory.build_from_snapshot(correct)
     command(restored, 4)  # Verify A, B and explicit zero bytes inside the guest.

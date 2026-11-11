@@ -280,9 +280,9 @@ Details about the required and optional fields can be found in the
     contents are only guaranteed to be committed/flushed to the host FS, but not
     necessarily to the underlying persistent storage (could still live in host
     FS cache).
-  - If dirty page tracking is enabled, the snapshot creation resets then the
-    dirtied page bitmap and marks all pages clean (from a dirty page tracking
-    point of view).
+  - If dirty page tracking is enabled, saving the memory file resets the dirty
+    records, then re-marks activated virtio queue pages as dirty. A state-only
+    snapshot preserves the dirty records.
 
 - _on failure_: no side-effects.
 
@@ -293,7 +293,7 @@ Details about the required and optional fields can be found in the
 
 #### External memory export and explicit dirty record clearing
 
-`PUT /vm/dirty-memory-ranges/clear` requires a started, paused VM and body `{}`.
+Send `PUT /vm/dirty-memory-ranges/clear` with body `{}` to a started, paused VM.
 Success returns `204 No Content`. With dirty tracking enabled, it clears current
 dirty records without changing guest bytes or pause state; repeated calls are
 allowed while quiescent. Activated MMIO/PCI virtio queue pages remain
@@ -362,14 +362,16 @@ For creating a diff snapshot, you should use the same API command, but with
 Diff snapshots come in two flavors. If `track_dirty_pages` was set to `true`
 when configuring the `/machine-config` resource or when restoring from a
 snapshot via `/snapshot/load`, Firecracker will use KVM's dirty page log runtime
-functionality to ensure the diff snapshot only contains exactly pages that were
-written to since boot / snapshot restoration. If `track_dirty_pages` is not
-enabled, Firecracker uses the [`mincore(2)`][man mincore] syscall to determine
-which pages to include in the snapshot. As such, this mode of snapshot taking
-will only work _if swap is disabled_, as mincore does not consider pages written
-to swap to be "in core". This potentially results in bigger memory files
-(although they are still sparse), but avoids the runtime overhead of dirty page
-logging.
+functionality to include pages dirtied since the current baseline, together with
+pages marked dirty by emulated devices. Saving a native memory snapshot or
+successfully calling CLEAR advances this baseline; a state-only snapshot does
+not. Apply each Diff to the complete memory image represented by its baseline.
+If `track_dirty_pages` is not enabled, Firecracker uses the
+[`mincore(2)`][man mincore] syscall to determine which pages to include in the
+snapshot. As such, this mode of snapshot taking will only work _if swap is
+disabled_, as mincore does not consider pages written to swap to be "in core".
+This potentially results in bigger memory files (although they are still
+sparse), but avoids the runtime overhead of dirty page logging.
 
 > [!NOTE]
 >
@@ -510,10 +512,10 @@ to the new Firecracker process as they were to the original one.
 - _on success_:
   - The complete microVM state is loaded from snapshot into the current
     Firecracker process.
-  - It then resets the dirtied page bitmap and marks all pages clean (from a
-    diff snapshot point of view).
-  - The loaded microVM is now in the `Paused` state, so it needs to be resumed
-    for it to run.
+  - The loaded memory image establishes the baseline for subsequent Diffs.
+    Device restoration can mark pages dirty, including activated virtio queue
+    pages.
+  - The loaded microVM is in the `Paused` state unless `resume_vm` is set.
   - The memory file (pointed by `backend_path` when using `File` backend type,
     or pointed by `mem_file_path`) **must** be considered immutable from
     Firecracker and host point of view. It backs the guest OS memory for read
