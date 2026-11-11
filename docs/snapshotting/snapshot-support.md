@@ -280,9 +280,9 @@ Details about the required and optional fields can be found in the
     contents are only guaranteed to be committed/flushed to the host FS, but not
     necessarily to the underlying persistent storage (could still live in host
     FS cache).
-  - If dirty page tracking is enabled, saving the memory file resets the dirty
-    records, then re-marks activated virtio queue pages as dirty. A state-only
-    snapshot preserves the dirty records.
+  - If dirty page tracking is enabled, the snapshot creation resets then the
+    dirtied page bitmap and marks all pages clean (from a dirty page tracking
+    point of view).
 
 - _on failure_: no side-effects.
 
